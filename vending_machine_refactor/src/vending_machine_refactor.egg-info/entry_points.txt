@@ -1,0 +1,3 @@
+[console_scripts]
+vending-machine-cli = vending_machine.presentation.cli:main
+vending-machine-gui = vending_machine.presentation.pyside_gui:main
