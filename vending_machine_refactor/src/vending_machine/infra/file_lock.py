@@ -28,6 +28,9 @@ class FileLock(AbstractContextManager["FileLock"]):
                 os.write(self._fd, str(os.getpid()).encode("utf-8"))
                 return self
             except FileExistsError:
+                if self._is_stale_lock():
+                    self._remove_stale_lock()
+                    continue
                 if time.monotonic() >= deadline:
                     raise FileLockTimeoutError(f"파일 잠금을 획득하지 못했습니다: {self.lock_path}")
                 time.sleep(self.poll_interval)
@@ -48,3 +51,36 @@ class FileLock(AbstractContextManager["FileLock"]):
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.release()
+
+    def _is_stale_lock(self) -> bool:
+        try:
+            raw = self.lock_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return False
+
+        if not raw:
+            return True
+
+        try:
+            pid = int(raw)
+        except ValueError:
+            return True
+
+        if pid == os.getpid():
+            return False
+
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            return False
+        except OSError:
+            return False
+        return False
+
+    def _remove_stale_lock(self) -> None:
+        try:
+            self.lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass

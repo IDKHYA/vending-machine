@@ -63,9 +63,31 @@ def test_purchase_keeps_remaining_balance_and_allows_more_cash():
     assert svc.session.inserted_total == 2200
     assert result.remaining_balance == 2200
 
-    second_insert = svc.insert_cash(5000)
-    assert second_insert.current_balance == 7200
-    assert svc.session.inserted_total == 7200
+    second_insert = svc.insert_cash(1000)
+    assert second_insert.current_balance == 3200
+    assert svc.session.inserted_total == 3200
+
+
+def test_insert_cash_enforces_bill_and_total_limits():
+    svc = make_service()
+    for _ in range(5):
+        svc.insert_cash(1000)
+
+    try:
+        svc.insert_cash(1000)
+        assert False, "1000원권은 누적 5000원을 넘기면 안 됩니다."
+    except ValueError as exc:
+        assert "5000원" in str(exc)
+
+    svc = make_service()
+    for amount in [1000, 1000, 1000, 1000, 1000, 500, 500, 500, 500]:
+        svc.insert_cash(amount)
+
+    try:
+        svc.insert_cash(10)
+        assert False, "총 투입 금액은 7000원을 넘기면 안 됩니다."
+    except ValueError as exc:
+        assert "7000원" in str(exc)
 
 
 def test_purchase_insufficient_balance():

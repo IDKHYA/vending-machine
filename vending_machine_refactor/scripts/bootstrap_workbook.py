@@ -22,9 +22,9 @@ def main() -> None:
     repo = ExcelMachineRepository(workbook_path)
 
     cash_inventory = CashInventory(
-        counts={10: 30, 50: 25, 100: 25, 500: 20, 1000: 12, 5000: 2, 10000: 1, 50000: 0},
-        min_keep={10: 15, 50: 10, 100: 10, 500: 8, 1000: 5, 5000: 1, 10000: 0, 50000: 0},
-        max_capacity={10: 300, 50: 250, 100: 250, 500: 200, 1000: 80, 5000: 40, 10000: 20, 50000: 5},
+        counts={10: 30, 50: 25, 100: 25, 500: 20, 1000: 12},
+        min_keep={10: 15, 50: 10, 100: 10, 500: 8, 1000: 5},
+        max_capacity={10: 300, 50: 250, 100: 250, 500: 200, 1000: 80},
     )
     config = {
         "admin_password_hash": PasswordHasher().hash_password("admin!12345"),

@@ -9,6 +9,9 @@ from vending_machine.infra.security import PasswordHasher
 
 
 class VendingMachineService:
+    MAX_BILL_INPUT_TOTAL = 5000
+    MAX_INSERTED_TOTAL = 7000
+
     def __init__(
         self,
         state: MachineState,
@@ -25,6 +28,7 @@ class VendingMachineService:
         if denomination not in VALID_DENOMINATIONS:
             raise ValueError(f"지원하지 않는 금액입니다: {denomination}")
 
+        self._validate_insert_limits(denomination)
         self.state.cash_inventory.add(denomination, 1)
         self.session.insert(denomination, 1)
 
@@ -70,6 +74,7 @@ class VendingMachineService:
         before_stock = product.stock
         product.decrease_stock(1)
         self.session.spend(product.price)
+        remaining = self.session.inserted_total
 
         now = self._now()
         sale_event = DomainEvent(
@@ -126,7 +131,7 @@ class VendingMachineService:
             success=True,
             code="OK",
             message=f"{product.name} 구매 완료",
-            remaining_balance=self.session.inserted_total,
+            remaining_balance=remaining,
             sale_events=[sale_event],
             cash_events=[],
             stock_events=stock_events,
@@ -417,6 +422,16 @@ class VendingMachineService:
                 continue
             if product.slot_no == slot_no:
                 raise ValueError(f"slot_no {slot_no}는 이미 다른 상품이 사용 중입니다.")
+
+    def _validate_insert_limits(self, denomination: int) -> None:
+        if self.session.inserted_total + denomination > self.MAX_INSERTED_TOTAL:
+            raise ValueError("총 투입 금액은 7000원을 넘을 수 없습니다.")
+
+        if denomination == 1000 and self._bill_inserted_total() + denomination > self.MAX_BILL_INPUT_TOTAL:
+            raise ValueError("지폐 입력 누적 금액은 5000원을 넘을 수 없습니다.")
+
+    def _bill_inserted_total(self) -> int:
+        return self.session.inserted_breakdown.get(1000, 0) * 1000
 
     def _audit_event(
         self,

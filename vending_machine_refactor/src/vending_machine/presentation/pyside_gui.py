@@ -1067,6 +1067,7 @@ class VendingMachineWindow(QMainWindow):
                 "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #E0F2FE, stop:1 #BFDBFE);}"
             )
             btn.setText(f"INSERT\n{format_won(denom)}")
+            btn.setProperty("denom", denom)
             btn.clicked.connect(lambda checked=False, d=denom: self.handle_insert(d))
             self.display_panel.money_grid.addWidget(btn, idx // 2, idx % 2)
             self.money_buttons.append(btn)
@@ -1076,6 +1077,7 @@ class VendingMachineWindow(QMainWindow):
         self.state = state
         self.session = session
         self.display_panel.set_balance(session.inserted_total)
+        self._refresh_money_buttons()
         self._render_products()
         self._refresh_side_panel()
 
@@ -1089,6 +1091,8 @@ class VendingMachineWindow(QMainWindow):
         for idx, product in enumerate(products):
             card = ProductCard(product, self.image_resolver, self.handle_purchase)
             card.update_from_product(product, self.session.inserted_total)
+            if not self._can_purchase(product):
+                card.buy_btn.setEnabled(False)
             if self.machine_paused:
                 card.buy_btn.setEnabled(False)
             self.slot_grid.addWidget(card, 0, idx)
@@ -1103,6 +1107,24 @@ class VendingMachineWindow(QMainWindow):
         self.side_cards[1].set_value(summary["best_seller"], "오늘 가장 많이 팔린 음료")
         self.side_cards[2].set_value(format_won(cash_total), "내부 현금 재고")
         self.side_cards[3].set_value(f"{low_stock_count}개", "재고 2개 이하 상품")
+
+    def _can_purchase(self, product) -> bool:
+        if not (product.active and product.stock > 0):
+            return False
+        return self.session.inserted_total >= product.price
+
+    def _refresh_money_buttons(self):
+        if self.machine_paused:
+            return
+        bill_total = self.session.inserted_breakdown.get(1000, 0) * 1000
+        for btn in self.money_buttons:
+            denom = int(btn.property("denom"))
+            allow_total = self.session.inserted_total + denom <= 7000
+            allow_bill = True
+            if denom == 1000:
+                allow_bill = bill_total + denom <= 5000
+            btn.setEnabled(allow_total and allow_bill)
+        self.display_panel.refund_btn.setEnabled(self.session.inserted_total > 0)
 
     def handle_insert(self, denomination: int):
         if self.machine_paused:
@@ -1192,9 +1214,9 @@ def _find_workbook() -> Path:
     """data/ 폴더에서 사용 가능한 워크북을 자동으로 찾습니다."""
     data_dir = _PROJECT_ROOT / "data"
     candidates = [
-        data_dir / "vending_machine_gui_demo.xlsx",
         data_dir / "vending_machine.xlsx",
         data_dir / "vending_machine_template.xlsx",
+        data_dir / "vending_machine_gui_demo.xlsx",
     ]
     for path in candidates:
         if path.exists():

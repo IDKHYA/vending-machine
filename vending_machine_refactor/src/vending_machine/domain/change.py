@@ -19,7 +19,7 @@ class ChangeCalculator:
     단순 greedy가 아닌 DFS + memo 방식으로 조합을 찾는다.
     """
 
-    def __init__(self, denominations: tuple[int, ...] = (50000, 10000, 5000, 1000, 500, 100, 50, 10)) -> None:
+    def __init__(self, denominations: tuple[int, ...] = (1000, 500, 100, 50, 10)) -> None:
         self.denominations = denominations
 
     def calculate(self, amount: int, available: Dict[int, int]) -> Dict[int, int]:

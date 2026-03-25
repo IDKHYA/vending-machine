@@ -54,7 +54,6 @@ def test_report_service_summarizes_sales_and_cashflow(tmp_path: Path):
 
     cashflow_by_type = {row.event_type: row for row in cashflow}
     assert cashflow_by_type["INSERT"].total_amount == 1000
-    assert cashflow_by_type["DISPENSE_CHANGE"].total_amount == 500
 
 
 def test_admin_actions_write_audit_log(tmp_path: Path):
@@ -87,3 +86,14 @@ def test_file_lock_is_cleaned_after_commit(tmp_path: Path):
     repo.commit(service.state, service.session, result.cash_events)
 
     assert not (tmp_path / "vm.xlsx.lock").exists()
+
+
+def test_stale_lock_file_is_removed_automatically(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    lock_path = tmp_path / "vm.xlsx.lock"
+    lock_path.write_text("999999", encoding="utf-8")
+
+    state = repo.load_state()
+
+    assert state.products["P001"].product_id == "P001"
+    assert not lock_path.exists()

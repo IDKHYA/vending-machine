@@ -31,13 +31,14 @@ def ensure_installed() -> None:
 
 
 def ensure_data_files() -> Path:
-    """데이터 파일이 없으면 bootstrap과 데모 시드를 실행합니다."""
+    """운영용 워크북을 우선 사용하고, 없으면 템플릿과 데모를 준비합니다."""
     data_dir = PROJECT_ROOT / "data"
-    demo_path = data_dir / "vending_machine_gui_demo.xlsx"
+    workbook_path = data_dir / "vending_machine.xlsx"
     template_path = data_dir / "vending_machine_template.xlsx"
+    demo_path = data_dir / "vending_machine_gui_demo.xlsx"
 
-    if demo_path.exists():
-        return demo_path
+    if workbook_path.exists():
+        return workbook_path
 
     if not template_path.exists():
         print("[설정] 데이터 파일이 없어 템플릿 워크북을 생성합니다.")
@@ -45,15 +46,20 @@ def ensure_data_files() -> Path:
         subprocess.run([sys.executable, str(bootstrap)], cwd=str(PROJECT_ROOT), check=True)
         print("   완료!")
 
+    if workbook_path.exists():
+        return workbook_path
+
     seed = PROJECT_ROOT / "scripts" / "seed_demo_analytics.py"
     if seed.exists() and not demo_path.exists():
         print("[설정] 데모 분석용 판매 데이터를 생성합니다.")
         subprocess.run([sys.executable, str(seed)], cwd=str(PROJECT_ROOT), check=True)
         print("   완료!")
 
-    if demo_path.exists():
-        return demo_path
-    return template_path
+    if workbook_path.exists():
+        return workbook_path
+    if template_path.exists():
+        return template_path
+    return demo_path
 
 
 def main() -> int:

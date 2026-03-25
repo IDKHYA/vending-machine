@@ -187,6 +187,8 @@ class ExcelMachineRepository:
             if row[0] is None:
                 continue
             denom = int(row[0])
+            if denom not in VALID_DENOMINATIONS:
+                continue
             cash_counts[denom] = int(row[1])
             min_keep[denom] = int(row[2])
             max_capacity[denom] = int(row[3])
