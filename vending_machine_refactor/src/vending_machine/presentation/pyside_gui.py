@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
@@ -15,7 +15,7 @@ from PySide6.QtCharts import (
     QPieSeries,
     QValueAxis,
 )
-from PySide6.QtCore import QDate, QPoint, QRectF, Qt, QSize
+from PySide6.QtCore import QDate, QPoint, QRectF, Qt, QSize, QTimer
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -83,6 +83,33 @@ THEME = {
     "ink": "#16223A",
 }
 
+UI = {
+    "bg": "#EEF1F4",
+    "machine": "#F7F7F7",
+    "paper": "#FCFCFC",
+    "ink": "#173644",
+    "ink_soft": "#32515D",
+    "teal": "#35C7BA",
+    "purple": "#B987E8",
+    "blue": "#456BFF",
+    "red": "#FF6B6B",
+    "green": "#28C58B",
+    "muted": "#80929B",
+    "line": "#16343F",
+    "slot": "#F2F5F7",
+}
+
+
+def frame_css(border_color: str, radius: int = 10, bg: str = "white", border_width: int = 3) -> str:
+    return (
+        f"QFrame{{background:{bg}; border:{border_width}px solid {border_color}; "
+        f"border-radius:{radius}px;}}"
+    )
+
+
+def label_css(size: int, weight: int = 800, color: str = UI["ink"]) -> str:
+    return f"font-size:{size}px; font-weight:{weight}; color:{color};"
+
 
 def format_won(value: int) -> str:
     return f"{value:,}원"
@@ -119,33 +146,41 @@ class BackendController:
         self.workbook_path = workbook_path
         self.repo = ExcelMachineRepository(workbook_path)
         self.report_service = SalesReportService(self.repo)
+        self._state_cache = None
+        self._session_cache = None
 
-    def load(self):
-        state = self.repo.load_state()
-        session = self.repo.load_session()
-        return state, session
+    def load(self, force_reload: bool = False):
+        if force_reload or self._state_cache is None or self._session_cache is None:
+            self._state_cache = self.repo.load_state()
+            self._session_cache = self.repo.load_session()
+        return self._state_cache, self._session_cache
 
-    def service(self) -> VendingMachineService:
-        state, session = self.load()
+    def service(self, force_reload: bool = False) -> VendingMachineService:
+        state, session = self.load(force_reload=force_reload)
         return VendingMachineService(state, session)
+
+    def _commit(self, state, session, events):
+        self.repo.commit(state, session, events)
+        self._state_cache = state
+        self._session_cache = session
 
     def insert_cash(self, denomination: int):
         svc = self.service()
         result = svc.insert_cash(denomination)
-        self.repo.commit(svc.state, svc.session, result.cash_events)
+        self._commit(svc.state, svc.session, result.cash_events)
         return result
 
     def purchase(self, product_id: str):
         svc = self.service()
         result = svc.purchase(product_id)
         events = [*result.sale_events, *result.cash_events, *result.stock_events]
-        self.repo.commit(svc.state, svc.session, events)
+        self._commit(svc.state, svc.session, events)
         return result
 
     def refund(self):
         svc = self.service()
         result = svc.refund()
-        self.repo.commit(svc.state, svc.session, result.cash_events)
+        self._commit(svc.state, svc.session, result.cash_events)
         return result
 
     def authenticate_admin(self, password: str) -> bool:
@@ -155,27 +190,32 @@ class BackendController:
     def refill_product(self, product_id: str):
         svc = self.service()
         events = svc.refill_product_to_max(product_id)
-        self.repo.commit(svc.state, svc.session, events)
+        self._commit(svc.state, svc.session, events)
 
     def adjust_product_stock(self, product_id: str, delta: int):
         svc = self.service()
         events = svc.adjust_product_stock(product_id, delta)
-        self.repo.commit(svc.state, svc.session, events)
+        self._commit(svc.state, svc.session, events)
 
     def refill_cash_to_minimum(self):
         svc = self.service()
         events = svc.refill_cash_to_minimum()
-        self.repo.commit(svc.state, svc.session, events)
+        self._commit(svc.state, svc.session, events)
 
     def collect_cash(self, keep_minimum: bool = True):
         svc = self.service()
         events = svc.collect_cash(keep_minimum=keep_minimum)
-        self.repo.commit(svc.state, svc.session, events)
+        self._commit(svc.state, svc.session, events)
 
     def update_product(self, product_id: str, **kwargs):
         svc = self.service()
         events = svc.update_product(product_id, **kwargs)
-        self.repo.commit(svc.state, svc.session, events)
+        self._commit(svc.state, svc.session, events)
+
+    def set_admin_password(self, new_password: str, actor: str = "admin_gui"):
+        svc = self.service()
+        events = svc.set_admin_password(new_password, actor=actor)
+        self._commit(svc.state, svc.session, events)
 
 
 class StatCard(QFrame):
@@ -285,7 +325,7 @@ class DisplayPanel(QFrame):
         super().__init__()
         self.amount_label = QLabel(format_won(0))
         self.status_label = QLabel("음료를 선택하거나 금액을 투입해 주세요")
-        self.pickup_label = QLabel("방금 뽑은 음료가 이곳에 표시됩니다")
+        self.pickup_label = QLabel("방금 뽑은 음료가 여기에 표시됩니다")
         self.setFixedWidth(320)
         self.setStyleSheet(
             "QFrame{border-radius:28px; background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #E4E7EC, stop:0.2 #C7CCD5, stop:0.5 #F5F6F8, stop:1 #C7CCD5);}"
@@ -328,8 +368,8 @@ class DisplayPanel(QFrame):
         iglay = QVBoxLayout(insert_group)
         iglay.setContentsMargins(16, 16, 16, 16)
         title_wrap = QHBoxLayout()
-        t1 = QLabel("투입 패널")
-        t2 = QLabel("빈칸 위치 전용 머니 존")
+        t1 = QLabel("투입 설명")
+        t2 = QLabel("투입 위치 안내 패널")
         t1.setStyleSheet("font-size:12px; font-weight:800; color:#64748B;")
         t2.setStyleSheet("font-size:19px; font-weight:900; color:#0F172A;")
         left = QVBoxLayout()
@@ -379,6 +419,410 @@ class DisplayPanel(QFrame):
     def set_status(self, message: str, ok: bool = True):
         color = "#86EFAC" if ok else "#FCA5A5"
         self.status_label.setStyleSheet(f"font-size:12px; font-weight:700; color:{color};")
+        self.status_label.setText(message)
+
+    def set_pickup(self, message: str):
+        self.pickup_label.setText(message)
+
+
+class SketchSelectButton(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._purchase_enabled = False
+        self.setStyleSheet("QFrame{background:transparent; border:none;}")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(7)
+
+        light_row = QHBoxLayout()
+        light_row.setContentsMargins(0, 0, 0, 0)
+        light_row.addStretch(1)
+
+        self.button = QPushButton("선택")
+        self.button.setFixedHeight(46)
+        self.button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.button.setStyleSheet(
+            "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #4A92FF, stop:0.45 #2E74DF, stop:1 #1D56B7);"
+            "border:3px solid #173E87; border-radius:15px; color:white; font-size:17px; font-weight:900;}"
+            "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #65A6FF, stop:0.45 #3980EA, stop:1 #2762C5);}"
+            "QPushButton:disabled{background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #C7D4E4, stop:1 #9EADC1);"
+            "border:3px solid #7F92AA; color:#ECF2F9;}"
+        )
+
+        self.dot = QFrame()
+        self.dot.setFixedSize(24, 16)
+        light_row.addWidget(self.dot)
+        light_row.addStretch(1)
+        layout.addLayout(light_row)
+        layout.addWidget(self.button, 1)
+        self.set_purchase_state(False)
+
+    def set_purchase_state(self, can_purchase: bool):
+        self._purchase_enabled = can_purchase
+        color = "#31D862" if can_purchase else "#E14A4A"
+        self.dot.setStyleSheet(
+            f"QFrame{{background:{color}; border:3px solid #0E2B62; border-radius:8px;}}"
+        )
+        self.button.setEnabled(can_purchase)
+
+    def clicked_connect(self, callback):
+        self.button.clicked.connect(callback)
+
+
+class SketchStatusRail(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._slot_count = 10
+        self.setStyleSheet("QFrame{background:transparent; border:none;}")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+        self.segments = []
+        for _ in range(self._slot_count):
+            seg = QFrame()
+            seg.setFixedHeight(12)
+            seg.setMinimumWidth(11)
+            layout.addWidget(seg)
+            self.segments.append(seg)
+        self.set_stock_ratio(0, 10)
+
+    def set_stock_ratio(self, stock: int, max_stock: int):
+        if max_stock <= 0:
+            active_count = 0
+        else:
+            active_count = max(0, min(self._slot_count, round((stock / max_stock) * self._slot_count)))
+            if stock > 0 and active_count == 0:
+                active_count = 1
+        for idx, seg in enumerate(self.segments):
+            active = idx < active_count
+            color = "#7FA9E1" if active else "#CCD5E0"
+            border = "#355A8A" if active else "#A9B6C6"
+            seg.setStyleSheet(
+                f"QFrame{{background:{color}; border:1px solid {border}; border-radius:2px;}}"
+            )
+
+
+class SketchProductImageBox(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumHeight(168)
+        self.setStyleSheet(
+            "QFrame{background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #FDFEFF, stop:0.25 #EAF1F8, stop:0.6 #CBD7E4, stop:1 #B4C2D1);"
+            "border:3px solid #B7C4D4; border-radius:16px;}"
+        )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 4)
+        layout.addWidget(self.image_label, 1)
+
+    def set_image(self, image_resolver, image_path: str | None, fallback_text: str):
+        pix_path = image_resolver.resolve(image_path)
+        self.image_label.setPixmap(QPixmap())
+        self.image_label.setText("")
+        if pix_path and pix_path.exists():
+            pix = QPixmap(str(pix_path)).scaled(
+                120,
+                146,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            self.image_label.setPixmap(pix)
+            return
+        self.image_label.setText(fallback_text)
+        self.image_label.setStyleSheet("font-size:16px; font-weight:800; color:#6B7C8F;")
+
+
+class SketchProductCard(QFrame):
+    def __init__(self, product, image_resolver, on_buy, parent=None):
+        super().__init__(parent)
+        self.product_id = product.product_id
+        self.image_resolver = image_resolver
+        self.on_buy = on_buy
+
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumWidth(146)
+        self.setStyleSheet(
+            "QFrame{background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #0F2E67, stop:0.5 #12336F, stop:1 #0B2554);"
+            "border:2px solid #0B2450; border-radius:18px;}"
+        )
+
+        self.image_box = SketchProductImageBox()
+        self.name_label = QLabel(product.name)
+        self.price_label = QLabel(format_won(product.price))
+        self.stock_label = QLabel()
+        self.stock_rail = SketchStatusRail()
+        self.buy_shell = SketchSelectButton()
+        self.buy_btn = self.buy_shell.button
+        self.buy_shell.clicked_connect(lambda: self.on_buy(self.product_id))
+
+        self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.price_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.stock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.name_label.setStyleSheet("font-size:18px; font-weight:900; color:#F8FBFF; border:none; background:transparent;")
+        self.price_label.setStyleSheet("font-size:15px; font-weight:900; color:#F4F8FF; border:none; background:transparent;")
+        self.stock_label.setStyleSheet("font-size:11px; font-weight:700; color:#D1DDF1; border:none; background:transparent;")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(9, 10, 9, 10)
+        layout.setSpacing(5)
+        layout.addWidget(self.image_box)
+        layout.addWidget(self.name_label)
+        layout.addWidget(self.price_label)
+        layout.addWidget(self.stock_rail)
+        layout.addWidget(self.stock_label)
+        layout.addWidget(self.buy_shell)
+
+        self.update_from_product(product, balance=0)
+
+    def update_from_product(self, product, balance: int):
+        self.image_box.set_image(self.image_resolver, getattr(product, "image_path", None), product.name)
+        self.name_label.setText(product.name)
+        self.price_label.setText(format_won(product.price))
+        self.stock_label.setText(f"재고 {product.stock}/{product.max_stock}")
+
+        available = bool(product.active and product.stock > 0)
+        affordable = balance >= product.price
+        enabled = available and affordable
+
+        self.stock_rail.set_stock_ratio(product.stock, product.max_stock)
+        self.buy_shell.set_purchase_state(enabled)
+
+
+class SketchCoinSlotVisual(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(74, 74)
+        self.setStyleSheet(
+            "QFrame{background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #C4CCD7, stop:0.5 #EEF3F8, stop:1 #7E8997);"
+            "border:2px solid #4D5661; border-radius:37px;}"
+        )
+        inner = QFrame(self)
+        inner.setGeometry(27, 13, 20, 48)
+        inner.setStyleSheet(
+            "QFrame{background:#4E565E; border:1px solid #D7E0EA; border-radius:10px;}"
+        )
+
+
+class SketchBillSlotVisual(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(116, 42)
+        self.setStyleSheet(
+            "QFrame{background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #C9D2DD, stop:0.55 #F7FAFD, stop:1 #8A96A6);"
+            "border:2px solid #657181; border-radius:4px;}"
+        )
+        slot = QFrame(self)
+        slot.setGeometry(14, 10, 88, 20)
+        slot.setStyleSheet("QFrame{background:#3C4652; border:1px solid #AAB5C2; border-radius:2px;}")
+
+
+class SketchMoneyButton(QPushButton):
+    def __init__(self, denom: int, circular: bool = True, parent=None):
+        super().__init__(parent)
+        self.denom = denom
+        self.circular = circular
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setText(format_won(denom))
+        if circular:
+            self.setFixedSize(68, 68)
+            self.setStyleSheet(
+                "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #F7FBFE, stop:0.45 #DFE6EF, stop:1 #B9C5D2);"
+                "border:2px solid #8A9AAF; border-radius:34px; color:#2A3F61; font-size:13px; font-weight:900;}"
+                "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #FFFFFF, stop:1 #D1DBE6);}"
+                "QPushButton:disabled{background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #E4E8ED, stop:1 #C7CED8);"
+                "border-color:#A8B3C1; color:#7E8A99;}"
+            )
+        else:
+            self.setMinimumHeight(60)
+            self.setStyleSheet(
+                "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #FFFFFF, stop:0.45 #F2F5F8, stop:1 #D8E0E8);"
+                "border:2px solid #A0ACBA; border-radius:10px; color:#1F3252; font-size:18px; font-weight:900; padding:8px 12px;}"
+                "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #FFFFFF, stop:1 #DFE6EE);}"
+                "QPushButton:disabled{background:#EEF2F6; border-color:#C8D0DA; color:#95A2B0;}"
+            )
+
+
+class SketchAmountPanel(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(
+            "QFrame{background:transparent; border:none;}"
+        )
+
+        title = QLabel("금액")
+        title.setStyleSheet("font-size:15px; font-weight:900; color:#132A52; border:none; background:transparent;")
+
+        self.amount_box = QFrame()
+        self.amount_box.setStyleSheet(
+            "QFrame{background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #313131, stop:0.55 #171717, stop:1 #3A3A3A);"
+            "border:3px solid #2C2C2C; border-radius:12px;}"
+        )
+        self.amount_label = QLabel(format_won(0))
+        self.amount_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.amount_label.setStyleSheet("font-size:28px; font-weight:900; color:#F2F2F2; border:none; background:transparent;")
+
+        self.status_label = QLabel("음료를 선택하거나 금액을 투입해 주세요.")
+        self.status_label.setWordWrap(True)
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_label.setStyleSheet("font-size:13px; font-weight:700; color:#3C4C60; border:none; background:transparent;")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(title)
+
+        amount_layout = QVBoxLayout(self.amount_box)
+        amount_layout.setContentsMargins(16, 8, 16, 8)
+        amount_layout.addWidget(self.amount_label)
+        layout.addWidget(self.amount_box)
+        layout.addWidget(self.status_label)
+
+
+class SketchPickupPanel(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet("QFrame{background:transparent; border:none;}")
+
+        self.title = QLabel("음료 나오는 곳")
+        self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.title.setStyleSheet("font-size:28px; font-weight:900; color:#153264; border:none; background:transparent;")
+
+        self.stage = QFrame()
+        self.stage.setMinimumHeight(178)
+        self.stage.setStyleSheet(
+            "QFrame{background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #515151, stop:0.18 #262626, stop:0.5 #A6A6A6, stop:0.82 #4B4B4B, stop:1 #8F8F8F);"
+            "border:1px solid #969696; border-radius:18px;}"
+        )
+
+        self.stage_text = QLabel("")
+        self.stage_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.stage_text.setWordWrap(True)
+        self.stage_text.setStyleSheet("font-size:18px; font-weight:700; color:transparent; border:none; background:transparent;")
+
+        stage_layout = QVBoxLayout(self.stage)
+        stage_layout.setContentsMargins(24, 18, 24, 18)
+        stage_layout.addWidget(self.stage_text)
+
+        self.pick_label = QLabel("PICK UP")
+        self.pick_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.pick_label.setStyleSheet("font-size:34px; font-weight:900; color:#153264; border:none; background:transparent;")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+        layout.addWidget(self.title)
+        layout.addWidget(self.stage)
+        layout.addWidget(self.pick_label)
+
+    def set_text(self, message: str):
+        self.stage_text.setText("")
+
+
+class SketchDisplayPanel(QFrame):
+    def __init__(self):
+        super().__init__()
+        self.setMinimumWidth(280)
+        self.setMaximumWidth(300)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        self.setStyleSheet(
+            "QFrame{background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #DADADA, stop:0.18 #EFEFEF, stop:0.45 #CFCFCF, stop:0.72 #F1F1F1, stop:1 #BDBDBD);"
+            "border:1px solid #A9A9A9; border-radius:10px;}"
+        )
+
+        self.amount_panel = SketchAmountPanel()
+        self.amount_label = self.amount_panel.amount_label
+        self.status_label = self.amount_panel.status_label
+
+        self.coin_slot = SketchCoinSlotVisual()
+        self.bill_slot = SketchBillSlotVisual()
+
+        self.refund_btn = QPushButton("반환구")
+        self.refund_btn.setFixedHeight(66)
+        self.refund_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.refund_btn.setStyleSheet(
+            "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #FFFFFF, stop:0.45 #EFF2F5, stop:1 #D4DADF);"
+            "border:2px solid #A9B3BE; border-radius:10px; font-size:21px; font-weight:900; color:#243649;}"
+            "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #FFFFFF, stop:1 #DCE6F0);}"
+            "QPushButton:disabled{color:#95A3B4; background:#EEF2F6;}"
+        )
+
+        self.money_box = QFrame()
+        self.money_box.setStyleSheet("QFrame{background:transparent; border:none;}")
+        self.money_coin_grid = QGridLayout()
+        self.money_coin_grid.setHorizontalSpacing(10)
+        self.money_coin_grid.setVerticalSpacing(10)
+        self.money_bill_layout = QVBoxLayout()
+        self.money_bill_layout.setSpacing(12)
+
+        money_layout = QVBoxLayout(self.money_box)
+        money_layout.setContentsMargins(0, 0, 0, 0)
+        money_layout.setSpacing(12)
+        money_layout.addLayout(self.money_coin_grid)
+        money_layout.addLayout(self.money_bill_layout)
+
+        self.pickup_panel = SketchPickupPanel()
+        self.pickup_label = self.pickup_panel.stage_text
+
+        self.admin_secret_btn = QPushButton("")
+        self.admin_secret_btn.setFixedSize(20, 20)
+        self.admin_secret_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.admin_secret_btn.setStyleSheet(
+            "QPushButton{background:#D9E2EC; border:1px solid #B7C4D3; border-radius:4px;}"
+            "QPushButton:hover{background:#CCD8E5;}"
+            "QPushButton:pressed{background:#B8C8D9;}"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+        layout.addWidget(self.amount_panel)
+
+        label_row = QHBoxLayout()
+        label_row.setSpacing(14)
+        coin_label = QLabel("동전 투입구")
+        bill_label = QLabel("지폐 투입구")
+        for lbl in (coin_label, bill_label):
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet("font-size:13px; font-weight:900; color:#132A52; border:none; background:transparent;")
+        label_row.addWidget(coin_label)
+        label_row.addWidget(bill_label)
+        layout.addLayout(label_row)
+
+        slot_row = QHBoxLayout()
+        slot_row.setSpacing(18)
+        slot_row.addWidget(self.coin_slot, 0, Qt.AlignmentFlag.AlignCenter)
+        slot_row.addWidget(self.bill_slot, 0, Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+        layout.addLayout(slot_row)
+
+        layout.addWidget(self.money_box)
+        layout.addWidget(self.refund_btn)
+
+        pickup_stub = QFrame()
+        pickup_stub.setFixedHeight(78)
+        pickup_stub.setStyleSheet(
+            "QFrame{background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #666666, stop:0.28 #A0A0A0, stop:0.65 #E2E2E2, stop:1 #7A7A7A);"
+            "border:1px solid #9C9C9C; border-radius:12px;}"
+        )
+        layout.addWidget(pickup_stub)
+        layout.addStretch(1)
+
+        secret_row = QHBoxLayout()
+        secret_row.setContentsMargins(0, 0, 2, 0)
+        secret_row.addStretch(1)
+        secret_row.addWidget(self.admin_secret_btn, 0, Qt.AlignmentFlag.AlignRight)
+        layout.addLayout(secret_row)
+
+    def set_balance(self, balance: int):
+        self.amount_label.setText(format_won(balance))
+
+    def set_status(self, message: str, ok: bool = True):
+        color = "#1F6B3B" if ok else "#B42318"
+        self.status_label.setStyleSheet(
+            f"font-size:14px; font-weight:700; color:{color}; border:none; background:transparent;"
+        )
         self.status_label.setText(message)
 
     def set_pickup(self, message: str):
@@ -451,15 +895,15 @@ class AdminLoginDialog(QDialog):
         self.setModal(True)
         self.setMinimumWidth(360)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("관리자 비밀번호를 입력하세요"))
+        layout.addWidget(QLabel("관리자 비밀번호를 입력해 주세요"))
         self.password_edit = QLineEdit()
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_edit.setPlaceholderText("비밀번호")
         self.password_edit.returnPressed.connect(self.accept)
         layout.addWidget(self.password_edit)
-        help_label = QLabel("기본 비밀번호: admin!12345")
-        help_label.setStyleSheet("color:#64748B; font-size:12px;")
-        layout.addWidget(help_label)
+        # help_label = QLabel("기본 비밀번호: admin!12345")
+        #help_label.setStyleSheet("color:#64748B; font-size:12px;")
+        #layout.addWidget(help_label)
         row = QHBoxLayout()
         cancel_btn = QPushButton("취소")
         ok_btn = QPushButton("인증")
@@ -558,6 +1002,40 @@ class AdminDashboardDialog(QDialog):
         header.addWidget(self.apply_btn)
         root.addLayout(header)
 
+        overview = QHBoxLayout()
+        self.admin_insight_cards = [
+            StatCard("오늘 순매출", THEME["navy"], inverted=True),
+            StatCard("베스트셀러"),
+            StatCard("보유 현금"),
+            StatCard("저재고 상품"),
+        ]
+        card_wrap = QHBoxLayout()
+        for card in self.admin_insight_cards:
+            card_wrap.addWidget(card)
+        overview.addLayout(card_wrap, 3)
+
+        security_box = QGroupBox("보안 설정")
+        security_box.setStyleSheet("QGroupBox{font-size:15px; font-weight:900; color:#0F172A; background:white; border-radius:22px; margin-top:10px; padding-top:14px;} QGroupBox::title{subcontrol-origin:margin; left:18px; padding:0 6px;}")
+        security_layout = QVBoxLayout(security_box)
+        security_note = QLabel("관리자 비밀번호를 변경할 수 있습니다.")
+        security_note.setStyleSheet("color:#64748B; font-size:12px; font-weight:700;")
+        self.new_password_edit = QLineEdit()
+        self.new_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.new_password_edit.setPlaceholderText("새 비밀번호")
+        self.confirm_password_edit = QLineEdit()
+        self.confirm_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.confirm_password_edit.setPlaceholderText("새 비밀번호 확인")
+        self.change_password_btn = QPushButton("비밀번호 변경")
+        self.change_password_btn.setMinimumHeight(44)
+        self.change_password_btn.setStyleSheet("QPushButton{background:#0F172A; color:white; border-radius:14px; font-weight:900; padding:0 14px;} QPushButton:hover{background:#1F2937;}")
+        self.change_password_btn.clicked.connect(self._handle_change_password)
+        security_layout.addWidget(security_note)
+        security_layout.addWidget(self.new_password_edit)
+        security_layout.addWidget(self.confirm_password_edit)
+        security_layout.addWidget(self.change_password_btn)
+        overview.addWidget(security_box, 2)
+        root.addLayout(overview)
+
         self.tabs = QTabWidget()
         root.addWidget(self.tabs, 1)
 
@@ -606,9 +1084,26 @@ class AdminDashboardDialog(QDialog):
         self.end_date.setDate(QDate(end.year, end.month, end.day))
 
     def refresh_all(self):
+        self._refresh_admin_insights()
         self._refresh_report_tab()
         self._refresh_product_tab()
         self._refresh_cash_tab()
+
+    def _refresh_admin_insights(self):
+        today = date.today()
+        report = self.controller.report_service
+        state, _ = self.controller.load()
+        summary = report.summary(today, today)
+        cash_total = state.cash_inventory.total_amount()
+        low_stock_count = len(report.low_stock_products(threshold=2))
+        values = [
+            (format_won(summary["net_sales"]), f"오늘 판매 {summary['sales_count']}건"),
+            (summary["best_seller"], "오늘 가장 많이 팔린 음료"),
+            (format_won(cash_total), "내부 현금 재고"),
+            (f"{low_stock_count}개", "재고 2개 이하 상품"),
+        ]
+        for card, (value, caption) in zip(self.admin_insight_cards, values):
+            card.set_value(value, caption)
 
     def _build_report_tab(self):
         layout = QVBoxLayout(self.report_tab)
@@ -630,9 +1125,9 @@ class AdminDashboardDialog(QDialog):
         self.cash_chart = self._empty_chart_view()
         self.trend_chart = self._empty_chart_view()
         chart_grid.addWidget(self._chart_box("일별 순매출", self.daily_chart), 0, 0)
-        chart_grid.addWidget(self._chart_box("상품 판매 비중", self.product_chart), 0, 1)
+        chart_grid.addWidget(self._chart_box("상품 매출 비중", self.product_chart), 0, 1)
         chart_grid.addWidget(self._chart_box("현금 흐름", self.cash_chart), 1, 0)
-        chart_grid.addWidget(self._chart_box("누적 판매 추이", self.trend_chart), 1, 1)
+        chart_grid.addWidget(self._chart_box("누적 매출 추이", self.trend_chart), 1, 1)
         layout.addLayout(chart_grid)
 
         bottom = QHBoxLayout()
@@ -650,7 +1145,7 @@ class AdminDashboardDialog(QDialog):
 
     def _build_product_tab(self):
         layout = QVBoxLayout(self.product_tab)
-        note = QLabel("상품명, 가격, 최대 재고, 표시 슬롯과 이미지를 편집할 수 있습니다.")
+        note = QLabel("상품명, 가격, 최대 재고, 표시 슬롯과 이미지 경로를 수정할 수 있습니다.")
         note.setStyleSheet("color:#64748B; font-size:13px; font-weight:700;")
         layout.addWidget(note)
         scroll = QScrollArea()
@@ -666,16 +1161,16 @@ class AdminDashboardDialog(QDialog):
         layout = QVBoxLayout(self.cash_tab)
         top = QHBoxLayout()
         self.cash_total_card = StatCard("보유 현금", THEME["navy"], inverted=True)
-        self.coin_mix_card = StatCard("권종 구성")
+        self.coin_mix_card = StatCard("沅뚯쥌 援ъ꽦")
         top.addWidget(self.cash_total_card)
         top.addWidget(self.coin_mix_card)
         layout.addLayout(top)
         self.cash_pie_chart = self._empty_chart_view()
         layout.addWidget(self._chart_box("현금 권종 비중", self.cash_pie_chart), 1)
         btn_row = QHBoxLayout()
-        refill_btn = QPushButton("최소 잔돈 기준으로 보충")
+        refill_btn = QPushButton("최소 보유 기준으로 보충")
         refill_btn.clicked.connect(self._handle_refill_cash)
-        collect_btn = QPushButton("최소 잔돈만 남기고 수거")
+        collect_btn = QPushButton("최소 보유량만 남기고 수거")
         collect_btn.clicked.connect(self._handle_collect_cash)
         for btn in (refill_btn, collect_btn):
             btn.setMinimumHeight(46)
@@ -688,7 +1183,7 @@ class AdminDashboardDialog(QDialog):
         self.cash_table.verticalHeader().setVisible(False)
         self.cash_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.cash_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
-        layout.addWidget(self._chart_box("잔돈 재고", self.cash_table), 1)
+        layout.addWidget(self._chart_box("현금 재고", self.cash_table), 1)
 
     def _chart_box(self, title: str, widget: QWidget) -> QGroupBox:
         box = QGroupBox(title)
@@ -712,7 +1207,7 @@ class AdminDashboardDialog(QDialog):
         report = self.controller.report_service
         summary = report.summary(start, end)
         card_values = [
-            (format_won(summary["net_sales"]), f"거스름돈 제외 · {summary['sales_count']}건"),
+            (format_won(summary["net_sales"]), f"거스름돈 제외 순매출 {summary['sales_count']}건"),
             (f"{summary['sales_count']}건", f"총 판매 수량 {summary['units_sold']}개"),
             (format_won(summary["avg_ticket"]), "순매출 기준 평균 결제"),
             (summary["best_seller"], "선택 기간 최다 판매"),
@@ -749,7 +1244,7 @@ class AdminDashboardDialog(QDialog):
         state, _ = self.controller.load()
         cash = state.cash_inventory
         total = cash.total_amount()
-        mix = ", ".join(f"{denom}원 {qty}개" for denom, qty in sorted(cash.counts.items()))
+        mix = ", ".join(f"{denom}원 x {qty}개" for denom, qty in sorted(cash.counts.items()))
         self.cash_total_card.set_value(format_won(total), "현재 자판기 내부 보유액")
         self.coin_mix_card.set_value(f"{len(cash.counts)}종", mix)
         self._set_cash_mix_chart(cash.counts)
@@ -793,12 +1288,12 @@ class AdminDashboardDialog(QDialog):
 
     def _set_product_sales_chart(self, rows):
         chart = QChart()
-        chart.setTitle("상품 판매 비중")
+        chart.setTitle("상품 매출 비중")
         chart.setAnimationOptions(QChart.AnimationOption.SeriesAnimations)
         chart.setBackgroundVisible(False)
         series = QPieSeries()
         if not rows:
-            chart.setTitle("상품 판매 비중 · 데이터 없음")
+            chart.setTitle("상품 매출 비중 · 데이터 없음")
             self.product_chart.setChart(chart)
             return
         for row in rows:
@@ -840,11 +1335,11 @@ class AdminDashboardDialog(QDialog):
 
     def _set_trend_chart(self, events):
         chart = QChart()
-        chart.setTitle("누적 판매 추이")
+        chart.setTitle("누적 매출 추이")
         chart.setAnimationOptions(QChart.AnimationOption.SeriesAnimations)
         chart.setBackgroundVisible(False)
         if not events:
-            chart.setTitle("누적 판매 추이 · 데이터 없음")
+            chart.setTitle("누적 매출 추이 · 데이터 없음")
             self.trend_chart.setChart(chart)
             return
         cumulative = 0
@@ -939,6 +1434,24 @@ class AdminDashboardDialog(QDialog):
         self.controller.collect_cash(keep_minimum=True)
         self.refresh_all()
 
+    def _handle_change_password(self):
+        new_password = self.new_password_edit.text().strip()
+        confirm_password = self.confirm_password_edit.text().strip()
+        if not new_password:
+            QMessageBox.warning(self, "입력 필요", "새 비밀번호를 입력해 주세요")
+            return
+        if new_password != confirm_password:
+            QMessageBox.warning(self, "입력 오류", "비밀번호 확인이 일치하지 않습니다.")
+            return
+        try:
+            self.controller.set_admin_password(new_password)
+        except Exception as exc:
+            QMessageBox.warning(self, "변경 실패", str(exc))
+            return
+        self.new_password_edit.clear()
+        self.confirm_password_edit.clear()
+        QMessageBox.information(self, "변경 완료", "관리자 비밀번호가 변경되었습니다.")
+
 
 class VendingMachineWindow(QMainWindow):
     def __init__(self, workbook_path: Path):
@@ -980,7 +1493,7 @@ class VendingMachineWindow(QMainWindow):
         title = QLabel("자동판매기")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet("font-size:42px; font-weight:900;")
-        sub = QLabel("Premium Smart Vending Interface · PySide6")
+        sub = QLabel("Premium Smart Vending Interface 쨌 PySide6")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sub.setStyleSheet("font-size:14px; font-weight:700; color:#DBEAFE;")
         hlay.addWidget(title)
@@ -1030,33 +1543,6 @@ class VendingMachineWindow(QMainWindow):
         machine_layout.addLayout(body)
         root.addWidget(machine_wrap, 1)
 
-        insight_panel = QFrame()
-        insight_panel.setFixedWidth(340)
-        insight_panel.setStyleSheet("QFrame{background:rgba(255,255,255,0.7); border-radius:30px;}")
-        side = QVBoxLayout(insight_panel)
-        side.setContentsMargins(18, 18, 18, 18)
-        side.setSpacing(12)
-        label = QLabel("스마트 인사이트")
-        label.setStyleSheet("font-size:12px; font-weight:800; color:#2563EB;")
-        big = QLabel("운영 상태")
-        big.setStyleSheet("font-size:28px; font-weight:900; color:#0F172A;")
-        side.addWidget(label)
-        side.addWidget(big)
-        self.side_cards = [
-            StatCard("오늘 순매출", THEME["navy"], inverted=True),
-            StatCard("베스트셀러"),
-            StatCard("보유 현금"),
-            StatCard("저재고 상품"),
-        ]
-        for card in self.side_cards:
-            side.addWidget(card)
-        tip = QTextEdit()
-        tip.setReadOnly(True)
-        tip.setText("UI 포인트\n\n• 투입 패널을 실제 자판기 우측 빈 공간으로 이동\n• 상품 선택은 진열창 아래 버튼으로 유지\n• 관리자 모드에서는 날짜 필터 기반 차트와 제품 편집을 지원\n• 엑셀 기반 백엔드와 즉시 연결되는 구조")
-        tip.setStyleSheet("background:#FFF7ED; border:0; border-radius:22px; padding:14px; color:#7C2D12; font-size:14px; font-weight:700;")
-        side.addWidget(tip, 1)
-        root.addWidget(insight_panel)
-
         self.display_panel.refund_btn.clicked.connect(self.handle_refund)
         self.display_panel.admin_btn.clicked.connect(self.open_admin)
         for idx, denom in enumerate(DENOMS):
@@ -1079,7 +1565,6 @@ class VendingMachineWindow(QMainWindow):
         self.display_panel.set_balance(session.inserted_total)
         self._refresh_money_buttons()
         self._render_products()
-        self._refresh_side_panel()
 
     def _render_products(self):
         while self.slot_grid.count():
@@ -1097,16 +1582,16 @@ class VendingMachineWindow(QMainWindow):
                 card.buy_btn.setEnabled(False)
             self.slot_grid.addWidget(card, 0, idx)
 
-    def _refresh_side_panel(self):
-        today = date.today()
-        report = self.controller.report_service
-        summary = report.summary(today, today)
-        cash_total = self.state.cash_inventory.total_amount()
-        low_stock_count = len(report.low_stock_products(threshold=2))
-        self.side_cards[0].set_value(format_won(summary["net_sales"]), f"오늘 판매 {summary['sales_count']}건")
-        self.side_cards[1].set_value(summary["best_seller"], "오늘 가장 많이 팔린 음료")
-        self.side_cards[2].set_value(format_won(cash_total), "내부 현금 재고")
-        self.side_cards[3].set_value(f"{low_stock_count}개", "재고 2개 이하 상품")
+    # def _refresh_side_panel(self):
+    #     today = date.today()
+    #     report = self.controller.report_service
+    #     summary = report.summary(today, today)
+    #     cash_total = self.state.cash_inventory.total_amount()
+    #     low_stock_count = len(report.low_stock_products(threshold=2))
+    #     self.side_cards[0].set_value(format_won(summary["net_sales"]), f"오늘 판매 {summary['sales_count']}건")
+    #     self.side_cards[1].set_value(summary["best_seller"], "오늘 가장 많이 팔린 음료")
+    #     self.side_cards[2].set_value(format_won(cash_total), "내부 현금 재고")
+    #     self.side_cards[3].set_value(f"{low_stock_count}개", "재고 2개 이하 상품")
 
     def _can_purchase(self, product) -> bool:
         if not (product.active and product.stock > 0):
@@ -1148,7 +1633,7 @@ class VendingMachineWindow(QMainWindow):
                 product_name = self.state.products.get(product_id).name if product_id in self.state.products else "음료"
                 self.display_panel.set_status(result.message, ok=True)
                 self.display_panel.set_pickup(
-                    f"{product_name} 준비 완료\n아래 PICK UP에서 수령하세요.\n남은 금액: {format_won(result.remaining_balance)}"
+                    f"{product_name} 준비 완료\n아래 PICK UP에서 수령하세요\n남은 금액: {format_won(result.remaining_balance)}"
                 )
             else:
                 self.display_panel.set_status(result.message, ok=False)
@@ -1203,15 +1688,15 @@ def run(workbook_path: str | Path):
     app = QApplication.instance() or QApplication(sys.argv)
     win = VendingMachineWindow(Path(workbook_path))
     win.show()
-    return app.exec()
+# 프로젝트 루트: src/vending_machine/presentation/pyside_gui.py 기준 4단계 상위
 
 
-# 프로젝트 루트: src/vending_machine/presentation/pyside_gui.py → 4단계 위
+# 프로젝트 루트: src/vending_machine/presentation/pyside_gui.py 기준 4단계 상위
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
 
 def _find_workbook() -> Path:
-    """data/ 폴더에서 사용 가능한 워크북을 자동으로 찾습니다."""
+    """data 폴더에서 사용 가능한 워크북을 자동으로 찾습니다."""
     data_dir = _PROJECT_ROOT / "data"
     candidates = [
         data_dir / "vending_machine.xlsx",
@@ -1234,8 +1719,301 @@ def _auto_bootstrap(data_dir: Path) -> None:
     if bootstrap.exists():
         print("[자동 설정] 데이터 파일이 없습니다. bootstrap_workbook.py를 실행합니다...")
         subprocess.run([sys.executable, str(bootstrap)], cwd=str(_PROJECT_ROOT), check=True)
+class SketchVendingMachineWindow(QMainWindow):
+    def __init__(self, workbook_path: Path):
+        super().__init__()
+        self.controller = BackendController(workbook_path)
+        self.image_resolver = ImageResolver(workbook_path)
+        self.machine_paused = False
+        self.money_buttons: list[QPushButton] = []
+        self._admin_click_streak = 0
+        self._admin_click_target = 5
+        self._admin_click_reset_timer = QTimer(self)
+        self._admin_click_reset_timer.setSingleShot(True)
+        self._admin_click_reset_timer.timeout.connect(self._reset_admin_click_streak)
+
+        self.setWindowTitle("자동판매기 · PySide6")
+        self.resize(1440, 860)
+        self.setStyleSheet(
+            "QMainWindow{background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #C8E2F8, stop:0.72 #9CC6EA, stop:1 #7BB0DE);}"
+            "QWidget{font-family:'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR';}"
+        )
+        self._build_ui()
+        self.refresh_view()
+
+    def _build_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+
+        root = QVBoxLayout(central)
+        root.setContentsMargins(18, 12, 18, 12)
+        root.setSpacing(0)
+
+        outer = QFrame()
+        outer.setStyleSheet("QFrame{background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #1B3E77, stop:0.5 #123067, stop:1 #0C2350); border:3px solid #143261; border-radius:26px;}")
+        shadow = QGraphicsDropShadowEffect(blurRadius=38, xOffset=0, yOffset=16)
+        shadow.setColor(QColor(0, 0, 0, 35))
+        outer.setGraphicsEffect(shadow)
+        root.addWidget(outer)
+
+        outer_layout = QVBoxLayout(outer)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        header = QFrame()
+        header.setStyleSheet(
+            "QFrame{background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #0B2757, stop:0.48 #12356E, stop:1 #0B2757);"
+            "border:none; border-top-left-radius:22px; border-top-right-radius:22px;}"
+        )
+        header.setMinimumHeight(124)
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(18, 18, 18, 18)
+
+        title = QLabel("자동판매기")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet("font-size:54px; font-weight:900; color:white; border:none; background:transparent;")
+        header_layout.addStretch(1)
+        header_layout.addWidget(title)
+        header_layout.addStretch(1)
+        outer_layout.addWidget(header)
+
+        inner = QFrame()
+        inner.setStyleSheet("QFrame{background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #FCFEFF, stop:0.52 #F2F4F7, stop:0.8 #E4E4E4, stop:1 #CDCDCD); border:none;}")
+        outer_layout.addWidget(inner, 1)
+
+        shell = QVBoxLayout(inner)
+        shell.setContentsMargins(30, 20, 22, 20)
+        shell.setSpacing(16)
+
+        body = QHBoxLayout()
+        body.setSpacing(18)
+        shell.addLayout(body, 1)
+
+        left_wrap = QWidget()
+        left_layout = QVBoxLayout(left_wrap)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(18)
+
+        product_shell = QFrame()
+        product_shell.setStyleSheet(
+            "QFrame{background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #102F69, stop:0.52 #12346F, stop:1 #0C2759);"
+            "border:2px solid #173868; border-radius:20px;}"
+        )
+        product_shell_layout = QVBoxLayout(product_shell)
+        product_shell_layout.setContentsMargins(10, 12, 10, 12)
+        product_shell_layout.setSpacing(8)
+
+        product_area = QWidget()
+        self.slot_grid = QGridLayout(product_area)
+        self.slot_grid.setContentsMargins(0, 0, 0, 0)
+        self.slot_grid.setHorizontalSpacing(10)
+        self.slot_grid.setVerticalSpacing(10)
+        product_shell_layout.addWidget(product_area)
+        left_layout.addWidget(product_shell)
+
+        pickup_container = QWidget()
+        pickup_layout = QVBoxLayout(pickup_container)
+        pickup_layout.setContentsMargins(0, 0, 0, 0)
+        pickup_layout.setSpacing(10)
+        self.bottom_pickup = SketchPickupPanel()
+        self.bottom_pickup.stage.setMinimumWidth(600)
+        self.bottom_pickup.stage.setMaximumWidth(720)
+        pickup_layout.addWidget(self.bottom_pickup.title)
+        pickup_layout.addWidget(self.bottom_pickup.stage, 0, Qt.AlignmentFlag.AlignHCenter)
+        pickup_layout.addWidget(self.bottom_pickup.pick_label)
+        left_layout.addWidget(pickup_container, 1)
+
+        body.addWidget(left_wrap, 5)
+
+        self.display_panel = SketchDisplayPanel()
+        body.addWidget(self.display_panel, 2)
+
+        body.setStretch(0, 5)
+        body.setStretch(1, 2)
+
+        self.display_panel.refund_btn.clicked.connect(self.handle_refund)
+        self.display_panel.admin_secret_btn.clicked.connect(self._handle_admin_secret_press)
+
+        self._build_money_buttons()
+
+    def _build_money_buttons(self):
+        coin_denoms = [d for d in DENOMS if d < 1000]
+        bill_denoms = [d for d in DENOMS if d >= 1000]
+
+        while self.display_panel.money_coin_grid.count():
+            item = self.display_panel.money_coin_grid.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        while self.display_panel.money_bill_layout.count():
+            item = self.display_panel.money_bill_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        self.money_buttons.clear()
+
+        for idx, denom in enumerate(coin_denoms):
+            btn = SketchMoneyButton(denom, circular=True)
+            btn.clicked.connect(lambda checked=False, d=denom: self.handle_insert(d))
+            self.display_panel.money_coin_grid.addWidget(btn, idx // 2, idx % 2)
+            self.money_buttons.append(btn)
+
+        for denom in bill_denoms:
+            btn = SketchMoneyButton(denom, circular=False)
+            btn.clicked.connect(lambda checked=False, d=denom: self.handle_insert(d))
+            self.display_panel.money_bill_layout.addWidget(btn)
+            self.money_buttons.append(btn)
+
+    def refresh_view(self):
+        state, session = self.controller.load()
+        self.state = state
+        self.session = session
+        self.display_panel.set_balance(session.inserted_total)
+        self._refresh_money_buttons()
+        self._render_products()
+
+    def _render_products(self):
+        while self.slot_grid.count():
+            item = self.slot_grid.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        products = sorted(self.state.products.values(), key=lambda p: (p.slot_no or 0, p.product_id))
+        max_cols = 6
+        for idx, product in enumerate(products):
+            card = SketchProductCard(product, self.image_resolver, self.handle_purchase)
+            card.update_from_product(product, self.session.inserted_total)
+            if not self._can_purchase(product):
+                card.buy_btn.setEnabled(False)
+                card.buy_shell.setEnabled(False)
+            if self.machine_paused:
+                card.buy_btn.setEnabled(False)
+                card.buy_shell.setEnabled(False)
+
+            row = idx // max_cols
+            col = idx % max_cols
+            self.slot_grid.addWidget(card, row, col)
+
+        for col in range(max_cols):
+            self.slot_grid.setColumnStretch(col, 1)
+
+    def _can_purchase(self, product) -> bool:
+        if not (product.active and product.stock > 0):
+            return False
+        return self.session.inserted_total >= product.price
+
+    def _refresh_money_buttons(self):
+        if self.machine_paused:
+            for btn in self.money_buttons:
+                btn.setEnabled(False)
+            self.display_panel.refund_btn.setEnabled(False)
+            self.display_panel.admin_secret_btn.setEnabled(False)
+            return
+
+        bill_total = self.session.inserted_breakdown.get(1000, 0) * 1000
+        for btn in self.money_buttons:
+            denom = getattr(btn, "denom", 0)
+            allow_total = self.session.inserted_total + denom <= 7000
+            allow_bill = True
+            if denom == 1000:
+                allow_bill = bill_total + denom <= 5000
+            btn.setEnabled(allow_total and allow_bill)
+
+        self.display_panel.refund_btn.setEnabled(self.session.inserted_total > 0)
+        self.display_panel.admin_secret_btn.setEnabled(True)
+
+    def handle_insert(self, denomination: int):
+        if self.machine_paused:
+            self.display_panel.set_status("관리자 모드 중에는 투입할 수 없습니다.", ok=False)
+            return
+        try:
+            result = self.controller.insert_cash(denomination)
+            self.display_panel.set_status(result.message, ok=True)
+            self.refresh_view()
+        except Exception as exc:
+            QMessageBox.warning(self, "금액 투입 실패", str(exc))
+
+    def handle_purchase(self, product_id: str):
+        if self.machine_paused:
+            self.display_panel.set_status("관리자 모드 중에는 구매할 수 없습니다.", ok=False)
+            return
+        try:
+            result = self.controller.purchase(product_id)
+            if result.success:
+                self.display_panel.set_status(result.message, ok=True)
+            else:
+                self.display_panel.set_status(result.message, ok=False)
+            self.refresh_view()
+        except Exception as exc:
+            QMessageBox.warning(self, "구매 실패", str(exc))
+
+    def handle_refund(self):
+        if self.machine_paused:
+            self.display_panel.set_status("관리자 모드 중에는 반환할 수 없습니다.", ok=False)
+            return
+        try:
+            result = self.controller.refund()
+            ok = result.success and result.refunded_amount >= 0
+            self.display_panel.set_status(result.message, ok=ok)
+            if result.refunded_amount:
+                detail = "\n" + ", ".join(
+                    f"{k}원 x {v}" for k, v in sorted(result.refunded_breakdown.items(), reverse=True)
+                )
+                msg = f"반환구에서 {format_won(result.refunded_amount)}을 꺼내세요{detail}"
+            else:
+                msg = "반환할 금액이 없습니다"
+            self.display_panel.set_status(msg, ok=ok)
+            self.refresh_view()
+        except Exception as exc:
+            QMessageBox.warning(self, "환불 실패", str(exc))
+
+    def open_admin(self):
+        login = AdminLoginDialog(self)
+        if login.exec() != login.DialogCode.Accepted:
+            return
+        if not self.controller.authenticate_admin(login.password):
+            QMessageBox.warning(self, "인증 실패", "관리자 비밀번호가 올바르지 않습니다.")
+            return
+        dialog = AdminDashboardDialog(self.controller, self.image_resolver, self)
+        self._set_machine_paused(True)
+        try:
+            dialog.exec()
+        finally:
+            self._set_machine_paused(False)
+            self.refresh_view()
+
+    def _handle_admin_secret_press(self):
+        if self.machine_paused:
+            return
+        self._admin_click_streak += 1
+        self._admin_click_reset_timer.start(1800)
+        if self._admin_click_streak >= self._admin_click_target:
+            self._reset_admin_click_streak()
+            self.open_admin()
+
+    def _reset_admin_click_streak(self):
+        self._admin_click_streak = 0
+
+    def _set_machine_paused(self, paused: bool):
+        self.machine_paused = paused
+        for btn in self.money_buttons:
+            btn.setEnabled(not paused)
+        self.display_panel.refund_btn.setEnabled(not paused)
+        self.display_panel.admin_secret_btn.setEnabled(not paused)
+        if paused:
+            msg = "관리자 모드 실행 중입니다. 자판기 입력을 잠시 멈춥니다."
+            self.display_panel.set_status(msg, ok=False)
+        self._render_products()
 
 
+def run(workbook_path: str | Path):
+    app = QApplication.instance() or QApplication(sys.argv)
+    win = SketchVendingMachineWindow(Path(workbook_path))
+    win.show()
+    return app.exec()
 def main(argv: list[str] | None = None) -> int:
     argv = list(argv or sys.argv[1:])
     if argv:
@@ -1249,3 +2027,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
