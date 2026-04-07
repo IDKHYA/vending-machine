@@ -295,6 +295,7 @@ class VendingMachineService:
                 action="PASSWORD_CHANGED",
                 target="machine_config.admin_password_hash",
                 detail="admin password hash updated",
+                extra_payload={"changes": {"admin_password_hash": ["***", "***updated***"]}},
             )
         ]
 
@@ -397,6 +398,7 @@ class VendingMachineService:
                 action="PRODUCT_UPDATED",
                 target=product.product_id,
                 detail=", ".join(f"{k}:{v[0]}->{v[1]}" for k, v in changed.items()),
+                extra_payload={"changes": changed},
             )
         ]
 
@@ -441,17 +443,21 @@ class VendingMachineService:
         target: str,
         detail: str,
         now: str | None = None,
+        extra_payload: dict | None = None,
     ) -> DomainEvent:
+        payload = {
+            "audit_id": self._new_id("AUDIT"),
+            "event_at": now or self._now(),
+            "actor": actor,
+            "action": action,
+            "target": target,
+            "detail": detail,
+        }
+        if extra_payload:
+            payload.update(extra_payload)
         return DomainEvent(
             sheet_name="audit_log",
-            payload={
-                "audit_id": self._new_id("AUDIT"),
-                "event_at": now or self._now(),
-                "actor": actor,
-                "action": action,
-                "target": target,
-                "detail": detail,
-            },
+            payload=payload,
         )
 
     def _now(self) -> str:

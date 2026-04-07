@@ -6,6 +6,7 @@ from pathlib import Path
 from vending_machine.app.report_service import SalesReportService
 from vending_machine.app.service import VendingMachineService
 from vending_machine.infra.excel_repository import ExcelMachineRepository
+from vending_machine.network.runtime import commit_local_and_publish
 
 
 ADMIN_COMMANDS = {
@@ -62,7 +63,8 @@ def main() -> None:
     parser.add_argument("--threshold", type=int, default=0)
     args = parser.parse_args()
 
-    repo = ExcelMachineRepository(Path(args.workbook))
+    workbook_path = Path(args.workbook)
+    repo = ExcelMachineRepository(workbook_path)
 
     if args.command in REPORT_COMMANDS:
         _handle_report(repo, args)
@@ -91,7 +93,7 @@ def main() -> None:
         if args.amount is None:
             raise SystemExit("--amount 값이 필요합니다.")
         result = service.insert_cash(args.amount)
-        repo.commit(service.state, service.session, result.cash_events)
+        commit_local_and_publish(repo, workbook_path, service.state, service.session, result.cash_events)
         print(result.message)
         print(f"현재 투입금액: {result.current_balance}원")
         return
@@ -100,7 +102,9 @@ def main() -> None:
         if args.product_id is None:
             raise SystemExit("--product-id 값이 필요합니다.")
         result = service.purchase(args.product_id)
-        repo.commit(
+        commit_local_and_publish(
+            repo,
+            workbook_path,
             service.state,
             service.session,
             result.sale_events + result.cash_events + result.stock_events,
@@ -112,7 +116,7 @@ def main() -> None:
 
     if args.command == "refund":
         result = service.refund()
-        repo.commit(service.state, service.session, result.cash_events)
+        commit_local_and_publish(repo, workbook_path, service.state, service.session, result.cash_events)
         print(result.message)
         if result.refunded_breakdown:
             print(f"반환 상세: {result.refunded_breakdown}")
@@ -122,20 +126,20 @@ def main() -> None:
         if args.product_id is None:
             raise SystemExit("--product-id 값이 필요합니다.")
         events = service.refill_product_to_max(args.product_id, actor=args.actor)
-        repo.commit(service.state, service.session, events)
+        commit_local_and_publish(repo, workbook_path, service.state, service.session, events)
         print(f"{args.product_id} 재고를 최대치로 보충했습니다.")
         return
 
     if args.command == "admin-collect-cash":
         keep_minimum = args.keep_minimum == "Y"
         events = service.collect_cash(keep_minimum=keep_minimum, actor=args.actor)
-        repo.commit(service.state, service.session, events)
+        commit_local_and_publish(repo, workbook_path, service.state, service.session, events)
         print("현금 수거 완료")
         return
 
     if args.command == "admin-refill-cash":
         events = service.refill_cash_to_minimum(actor=args.actor)
-        repo.commit(service.state, service.session, events)
+        commit_local_and_publish(repo, workbook_path, service.state, service.session, events)
         print("최소 유지 수량 기준으로 현금 보충 완료")
         return
 
@@ -143,7 +147,7 @@ def main() -> None:
         if not args.new_password:
             raise SystemExit("--new-password 값이 필요합니다.")
         events = service.set_admin_password(args.new_password, actor=args.actor)
-        repo.commit(service.state, service.session, events)
+        commit_local_and_publish(repo, workbook_path, service.state, service.session, events)
         print("관리자 비밀번호 변경 완료")
         return
 
@@ -161,7 +165,7 @@ def main() -> None:
             slot_no=args.slot_no,
             actor=args.actor,
         )
-        repo.commit(service.state, service.session, events)
+        commit_local_and_publish(repo, workbook_path, service.state, service.session, events)
         print(f"{args.product_id} 상품 정보 수정 완료")
         return
 

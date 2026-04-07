@@ -32,6 +32,10 @@ def main() -> None:
         "refund_strategy": "exact_only",
         "legacy_source": "pyside_gui_ready",
         "theme": "midnight_blue_metal",
+        "machine_id": "VM-A",
+        "server_id": "server1",
+        "server_api_base_url": "",
+        "network_enabled": "Y",
     }
     repo.create_template(products=PRODUCTS, cash_inventory=cash_inventory, config=config)
     print(f"created: {workbook_path}")

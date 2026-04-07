@@ -20,6 +20,7 @@ def ensure_installed() -> None:
     try:
         import openpyxl  # noqa: F401
         import PySide6  # noqa: F401
+        import httpx  # noqa: F401
     except ImportError:
         print("[설정] 필요한 패키지를 설치합니다. (pip install -e .)")
         subprocess.run(
@@ -64,7 +65,7 @@ def ensure_data_files() -> Path:
 
 def main() -> int:
     print("=" * 52)
-    print("  자판기 PySide6 GUI")
+    print("  자판기 실행중...")
     print("=" * 52)
 
     ensure_local_src_first()
